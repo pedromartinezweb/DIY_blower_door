@@ -5,6 +5,18 @@
 #include "task.h"
 #include <string.h>
 
+#define CALIBRATION_DURATION_MS 10000u
+#define CALIBRATION_MIN_SAMPLES 20u
+
+typedef struct {
+  bool active;
+  TickType_t start_tick;
+  float fan_sum;
+  float envelope_sum;
+  uint32_t fan_count;
+  uint32_t envelope_count;
+} calibration_accumulator_t;
+
 typedef struct {
   SemaphoreHandle_t mutex;
   blower_metrics_models_t models;
@@ -16,6 +28,7 @@ typedef struct {
   bool has_last_fan_pressure_raw;
   bool has_last_envelope_pressure_raw;
   bool is_initialized;
+  calibration_accumulator_t cal;
 } blower_metrics_service_context_t;
 
 static blower_metrics_service_context_t g_service_context;
@@ -82,6 +95,7 @@ void blower_metrics_service_initialize(const blower_metrics_models_t *models) {
   g_service_context.last_envelope_pressure_raw_pa = 0.0f;
   g_service_context.has_last_fan_pressure_raw = false;
   g_service_context.has_last_envelope_pressure_raw = false;
+  memset(&g_service_context.cal, 0, sizeof(g_service_context.cal));
   g_service_context.is_initialized = true;
   xSemaphoreGive(g_service_context.mutex);
 }
@@ -126,6 +140,56 @@ void blower_metrics_service_update(const adp910_sample_t *fan_sample,
     snapshot->envelope_sample_valid = true;
   } else {
     snapshot->envelope_sample_valid = false;
+  }
+
+  /* ── Calibration accumulator ── */
+  if (g_service_context.cal.active) {
+    const TickType_t now_tick = xTaskGetTickCount();
+    const TickType_t elapsed =
+        now_tick - g_service_context.cal.start_tick;
+    const uint32_t elapsed_ms = (uint32_t)(elapsed * portTICK_PERIOD_MS);
+
+    if (fan_sample_valid && fan_sample != NULL) {
+      g_service_context.cal.fan_sum += fan_sample->corrected_pressure_pa;
+      g_service_context.cal.fan_count += 1u;
+    }
+    if (envelope_sample_valid && envelope_sample != NULL) {
+      g_service_context.cal.envelope_sum +=
+          envelope_sample->corrected_pressure_pa;
+      g_service_context.cal.envelope_count += 1u;
+    }
+
+    if (elapsed_ms < CALIBRATION_DURATION_MS) {
+      uint32_t pct = (elapsed_ms * 100u) / CALIBRATION_DURATION_MS;
+      if (pct > 99u) pct = 99u;
+      snapshot->calibration_state = BLOWER_CAL_SAMPLING;
+      snapshot->calibration_progress_pct = (uint8_t)pct;
+    } else {
+      /* Calibration period complete — apply averaged offsets */
+      if (g_service_context.cal.fan_count >= CALIBRATION_MIN_SAMPLES) {
+        g_service_context.fan_pressure_offset_pa =
+            g_service_context.cal.fan_sum /
+            (float)g_service_context.cal.fan_count;
+        snapshot->fan_pressure_pa =
+            g_service_context.last_fan_pressure_raw_pa -
+            g_service_context.fan_pressure_offset_pa;
+      }
+      if (g_service_context.cal.envelope_count >= CALIBRATION_MIN_SAMPLES) {
+        g_service_context.envelope_pressure_offset_pa =
+            g_service_context.cal.envelope_sum /
+            (float)g_service_context.cal.envelope_count;
+        snapshot->envelope_pressure_pa =
+            g_service_context.last_envelope_pressure_raw_pa -
+            g_service_context.envelope_pressure_offset_pa;
+      }
+      snapshot->calibration_fan_offset =
+          g_service_context.fan_pressure_offset_pa;
+      snapshot->calibration_envelope_offset =
+          g_service_context.envelope_pressure_offset_pa;
+      snapshot->calibration_state = BLOWER_CAL_DONE;
+      snapshot->calibration_progress_pct = 100u;
+      g_service_context.cal.active = false;
+    }
   }
 
   snapshot->fan_speed_units = g_service_context.models.fan_speed_model(
@@ -197,4 +261,32 @@ bool blower_metrics_service_capture_zero_offsets(void) {
 
   xSemaphoreGive(g_service_context.mutex);
   return captured;
+}
+
+void blower_metrics_service_begin_calibration(void) {
+  if (g_service_context.mutex == NULL || !g_service_context.is_initialized) {
+    return;
+  }
+
+  if (xSemaphoreTake(g_service_context.mutex, portMAX_DELAY) != pdTRUE) {
+    return;
+  }
+
+  /* Reset offsets so accumulation uses raw readings */
+  g_service_context.fan_pressure_offset_pa = 0.0f;
+  g_service_context.envelope_pressure_offset_pa = 0.0f;
+
+  g_service_context.cal = (calibration_accumulator_t){
+      .active = true,
+      .start_tick = xTaskGetTickCount(),
+      .fan_sum = 0.0f,
+      .envelope_sum = 0.0f,
+      .fan_count = 0u,
+      .envelope_count = 0u,
+  };
+
+  g_service_context.snapshot.calibration_state = BLOWER_CAL_SAMPLING;
+  g_service_context.snapshot.calibration_progress_pct = 0u;
+
+  xSemaphoreGive(g_service_context.mutex);
 }

@@ -101,31 +101,36 @@ body {
     padding: 16px;
 }
 
-/* ── Calibration Banner ── */
+/* ── Calibration Gate (inside mode card) ── */
 
-.cal-banner {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 16px; border-radius: var(--r-lg);
-    background: var(--warn-soft); border: 1px solid var(--warn-b);
-    transition: background var(--tr), border-color var(--tr);
+.cal-gate {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 10px; padding: 32px 16px; text-align: center;
 }
-.cal-banner.ok { background: var(--ok-soft); border-color: var(--ok-b); }
-
-.cal-content { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.cal-icon { flex-shrink: 0; color: var(--warn); }
-.cal-banner.ok .cal-icon { color: var(--ok); }
-.cal-title { margin: 0; font-size: 0.88rem; font-weight: 700; }
-.cal-detail { margin: 2px 0 0; font-size: 0.78rem; color: var(--text-2); }
-
-.btn-cal {
-    flex-shrink: 0; padding: 8px 18px; border-radius: var(--r-pill);
-    border: 1px solid var(--warn-b); background: white;
-    color: var(--warn); font-weight: 700; font-size: 0.82rem;
-    cursor: pointer; transition: background var(--tr);
-    font-family: inherit;
+.cal-gate-icon { color: var(--warn); }
+.cal-gate-title { margin: 0; font-size: 1rem; font-weight: 700; }
+.cal-gate-hint { margin: 0; font-size: 0.82rem; color: var(--text-2); max-width: 320px; }
+.cal-gate-progress {
+    width: 100%; max-width: 280px;
+    display: grid; gap: 6px; text-align: center;
 }
-.cal-banner.ok .btn-cal { border-color: var(--ok-b); color: var(--ok); }
-.btn-cal:hover { background: var(--surface-alt); }
+.cal-gate-progress progress {
+    width: 100%; height: 8px; border-radius: var(--r-pill);
+    -webkit-appearance: none; appearance: none; overflow: hidden;
+}
+.cal-gate-progress progress::-webkit-progress-bar { background: #e2e8f0; border-radius: var(--r-pill); }
+.cal-gate-progress progress::-webkit-progress-value {
+    background: var(--primary); border-radius: var(--r-pill);
+    transition: width 300ms ease;
+}
+.cal-gate-progress span { font-size: 0.78rem; color: var(--text-2); }
+.cal-gate-result {
+    margin: 0; font-size: 0.82rem; font-weight: 600;
+    color: var(--ok); padding: 6px 14px; border-radius: var(--r-pill);
+    background: var(--ok-soft);
+}
+.cal-gate.ok .cal-gate-icon { color: var(--ok); }
+.cal-gate.ok .cal-gate-title { color: var(--ok); }
 
 /* ── Hero ── */
 
@@ -178,7 +183,39 @@ body {
 .mode-panel { padding: 16px; }
 .mode-panel.hidden { display: none; }
 
-.mode-card.locked .mode-panel { opacity: 0.35; pointer-events: none; filter: grayscale(0.4); }
+.mode-card.locked .mode-panel { display: none; }
+.mode-card.locked .cal-recal { display: none !important; }
+.mode-card:not(.locked) .cal-gate { display: none; }
+.mode-card.locked .mode-tabs { opacity: 0.4; pointer-events: none; }
+
+/* ── Recalibrate compact bar ── */
+
+.cal-recal {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.82rem;
+}
+.cal-recal-status {
+    color: var(--ok); font-weight: 600; flex: 1;
+}
+.cal-recal-progress {
+    display: flex; align-items: center; gap: 6px; flex: 1;
+}
+.cal-recal-progress progress {
+    flex: 1; height: 6px; border-radius: var(--r-pill);
+    -webkit-appearance: none; appearance: none; overflow: hidden;
+}
+.cal-recal-progress progress::-webkit-progress-bar {
+    background: #e2e8f0; border-radius: var(--r-pill);
+}
+.cal-recal-progress progress::-webkit-progress-value {
+    background: var(--primary); border-radius: var(--r-pill);
+    transition: width 300ms ease;
+}
+.cal-recal-progress span {
+    font-size: 0.75rem; color: var(--text-2); white-space: nowrap;
+}
 
 /* ── Manual Mode ── */
 

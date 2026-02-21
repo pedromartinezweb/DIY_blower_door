@@ -38,7 +38,7 @@ const state = {
     semiTargetPa: null,
     achHistory: [],
     lastManualSpeed: 40,
-    baseline: { fanOffset: null, envelopeOffset: null, capturedAt: null },
+    baseline: { done: false, everCalibrated: false, fanOffset: null, envelopeOffset: null },
     control: {
         active: false,
         stage: 'idle',
@@ -54,8 +54,14 @@ const $ = (id) => document.getElementById(id);
 
 const refs = {
     connDot: $('connDot'), connLabel: $('connLabel'), statusMsg: $('statusMsg'),
-    calBanner: $('calBanner'), calTitle: $('calTitle'), calDetail: $('calDetail'),
-    calibrateBtn: $('calibrateBtn'),
+    calGate: $('calGate'), calTitle: $('calTitle'), calDetail: $('calDetail'),
+    calibrateBtn: $('calibrateBtn'), calProgress: $('calProgress'),
+    calProgressBar: $('calProgressBar'), calProgressLabel: $('calProgressLabel'),
+    calResult: $('calResult'),
+    calRecal: $('calRecal'), calRecalStatus: $('calRecalStatus'),
+    recalibrateBtn: $('recalibrateBtn'),
+    calRecalProgress: $('calRecalProgress'), calRecalBar: $('calRecalBar'),
+    calRecalLabel: $('calRecalLabel'),
     heroAch: $('heroAch'), heroAchInstant: $('heroAchInstant'),
     heroModeLabel: $('heroModeLabel'), heroPa: $('heroPa'), heroTarget: $('heroTarget'),
     modeCard: $('modeCard'),
@@ -94,7 +100,7 @@ const toBool = (v) => v === true || v === 1 || v === 'true' || v === '1';
 const fmt = (v, u, d = 1) => Number.isFinite(v) ? `${v.toFixed(d)} ${u}` : `-- ${u}`;
 
 function isCalibrated() {
-    return Number.isFinite(state.baseline.fanOffset) && Number.isFinite(state.baseline.envelopeOffset);
+    return state.baseline.done === true;
 }
 
 function setStatus(text) {
@@ -227,38 +233,73 @@ function loadSettings() {
 
 /* ── Calibration ── */
 
-function updateCalBanner() {
-    if (!refs.calBanner) return;
-    const ok = isCalibrated();
-    refs.calBanner.classList.toggle('ok', ok);
-    if (refs.modeCard) refs.modeCard.classList.toggle('locked', !ok);
-
-    if (!ok) {
-        if (refs.calTitle) refs.calTitle.textContent = 'Zero calibration required';
-        if (refs.calDetail) refs.calDetail.textContent = 'Calibrate sensors before starting any test';
-        if (refs.calibrateBtn) refs.calibrateBtn.textContent = 'Calibrate';
-        return;
+function updateCalGate(calState, calPct, calFan, calEnv) {
+    const calibrated = calState === 2;
+    state.baseline.done = calibrated;
+    if (calibrated) {
+        state.baseline.fanOffset = calFan;
+        state.baseline.envelopeOffset = calEnv;
+        state.baseline.everCalibrated = true;
     }
-    const t = state.baseline.capturedAt ? fmtTime(state.baseline.capturedAt) : '--';
-    if (refs.calTitle) refs.calTitle.textContent = 'Sensors calibrated';
-    if (refs.calDetail) refs.calDetail.textContent =
-        `Fan ${state.baseline.fanOffset.toFixed(1)} Pa · Bldg ${state.baseline.envelopeOffset.toFixed(1)} Pa · ${t}`;
-    if (refs.calibrateBtn) refs.calibrateBtn.textContent = 'Re-calibrate';
-}
 
-function captureCalibration() {
-    if (!latestTelemetry) { setStatus('No telemetry for calibration'); return; }
-    const t = extractTelemetry(latestTelemetry);
-    if (!Number.isFinite(t.rawFanPa) || !Number.isFinite(t.rawEnvPa)) {
-        setStatus('No valid readings for calibration'); return;
+    /* Recalibration path: if we already calibrated once, never re-lock */
+    const isRecal = state.baseline.everCalibrated;
+    if (refs.modeCard) refs.modeCard.classList.toggle('locked', !calibrated && !isRecal);
+
+    /* ── Compact recal bar (shown after first calibration) ── */
+    if (isRecal && refs.calRecal) {
+        refs.calRecal.hidden = false;
+        if (calState === 1) {
+            /* Recalibrating: show inline progress */
+            if (refs.calRecalStatus) refs.calRecalStatus.textContent = 'Recalibrating...';
+            if (refs.calRecalProgress) refs.calRecalProgress.hidden = false;
+            if (refs.calRecalBar) refs.calRecalBar.value = calPct;
+            const secs = Math.round(calPct / 10);
+            if (refs.calRecalLabel) refs.calRecalLabel.textContent = `${secs}s / 10s`;
+            if (refs.recalibrateBtn) refs.recalibrateBtn.hidden = true;
+        } else {
+            /* Idle or done: show recalibrate button */
+            if (refs.calRecalStatus) refs.calRecalStatus.textContent = '\u2713 Calibrated';
+            if (refs.calRecalProgress) refs.calRecalProgress.hidden = true;
+            if (refs.recalibrateBtn) { refs.recalibrateBtn.hidden = false; refs.recalibrateBtn.disabled = false; }
+        }
+    } else if (refs.calRecal) {
+        refs.calRecal.hidden = true;
     }
-    state.baseline.fanOffset = t.rawFanPa;
-    state.baseline.envelopeOffset = t.rawEnvPa;
-    state.baseline.capturedAt = new Date();
-    updateCalBanner();
-    resetAch();
-    setStatus('Zero calibration applied');
-    handleTelemetry(latestTelemetry, 'calibrated');
+
+    /* ── Full cal-gate (only shown for first-time calibration) ── */
+    if (!refs.calGate) return;
+    if (isRecal) return; /* skip full gate updates if already calibrated once */
+
+    if (calState === 1) {
+        refs.calGate.classList.remove('ok');
+        if (refs.calTitle) refs.calTitle.textContent = 'Calibrating...';
+        if (refs.calDetail) refs.calDetail.textContent = 'Sampling sensor zero offsets';
+        if (refs.calibrateBtn) refs.calibrateBtn.hidden = true;
+        if (refs.calProgress) refs.calProgress.hidden = false;
+        if (refs.calProgressBar) refs.calProgressBar.value = calPct;
+        const secs = Math.round(calPct / 10);
+        if (refs.calProgressLabel) refs.calProgressLabel.textContent = `Sampling... ${secs}s / 10s`;
+        if (refs.calResult) refs.calResult.hidden = true;
+    } else if (calibrated) {
+        refs.calGate.classList.add('ok');
+        if (refs.calTitle) refs.calTitle.textContent = 'Sensors Calibrated';
+        if (refs.calDetail) refs.calDetail.textContent = '';
+        if (refs.calibrateBtn) refs.calibrateBtn.hidden = true;
+        if (refs.calProgress) refs.calProgress.hidden = true;
+        if (refs.calResult) {
+            refs.calResult.hidden = false;
+            refs.calResult.textContent = `Fan ${calFan.toFixed(2)} Pa \u00b7 Bldg ${calEnv.toFixed(2)} Pa`;
+        }
+        resetAch();
+    } else {
+        refs.calGate.classList.remove('ok');
+        if (refs.calTitle) refs.calTitle.textContent = 'Zero Calibration Required';
+        if (refs.calDetail) refs.calDetail.textContent = 'Ensure fan is off and no pressure across sensors';
+        if (refs.calibrateBtn) { refs.calibrateBtn.hidden = false; refs.calibrateBtn.textContent = 'Calibrate Sensors'; refs.calibrateBtn.disabled = false; }
+        if (refs.calProgress) refs.calProgress.hidden = true;
+        if (refs.calResult) refs.calResult.hidden = true;
+    }
 }
 
 /* ── Mode management ── */
@@ -505,6 +546,13 @@ function handleTelemetry(data, detail) {
     updateHero(t.fanPa, t.envPa, t.envT);
     processControl(t.envPa, t.envOk);
 
+    /* Calibration state from firmware */
+    const calState = toNum(data.cal, 0);
+    const calPct = toNum(data.cal_pct, 0);
+    const calFan = toNum(data.cal_fan, 0);
+    const calEnv = toNum(data.cal_env, 0);
+    updateCalGate(calState, calPct, calFan, calEnv);
+
     if (t.fw) {
         if (refs.fwVersion) refs.fwVersion.textContent = `Firmware: ${t.fw}`;
         if (refs.fwVersionLabel) refs.fwVersionLabel.textContent = t.fw;
@@ -686,17 +734,22 @@ function bindEvents() {
     refs.closeDrawerBtn?.addEventListener('click', closeDrawer);
     refs.drawerBackdrop?.addEventListener('click', closeDrawer);
 
-    refs.calibrateBtn?.addEventListener('click', async () => {
+    const triggerCalibration = async (sourceBtn) => {
         stopControl(false);
         requestPwm(0);
+        if (sourceBtn) sourceBtn.disabled = true;
         try {
             await postJson(API.calibrate, {});
-            captureCalibration();
+            setStatus('Calibration started (10s sampling)');
         } catch (e) {
+            if (sourceBtn) sourceBtn.disabled = false;
             setConn('err', 'Calibration failed');
             setStatus(`Calibration failed: ${e.message}`);
         }
-    });
+    };
+
+    refs.calibrateBtn?.addEventListener('click', () => triggerCalibration(refs.calibrateBtn));
+    refs.recalibrateBtn?.addEventListener('click', () => triggerCalibration(refs.recalibrateBtn));
 
     /* Manual mode */
     const debouncedPwm = debounce((v) => {
@@ -808,7 +861,7 @@ function bootstrap() {
     updateAutoButtons();
     updateTargetDisplay();
     updateApertureLabel();
-    updateCalBanner();
+    updateCalGate(0, 0, 0, 0);
     updatePwmDisplay(0);
     setOtaProgress(0, 'OTA idle');
     setStatus('Idle');

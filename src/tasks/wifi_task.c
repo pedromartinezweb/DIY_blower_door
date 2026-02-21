@@ -78,6 +78,10 @@ typedef struct {
   float target_pressure_pa;
   uint32_t sample_sequence;
   uint32_t logs_generation;
+  uint8_t cal_state;
+  uint8_t cal_pct;
+  float cal_fan_offset;
+  float cal_env_offset;
 } web_status_snapshot_t;
 
 typedef struct {
@@ -883,6 +887,10 @@ static bool web_collect_status_snapshot(web_status_snapshot_t *out_snapshot) {
       .target_pressure_pa = control_snapshot.target_pressure_pa,
       .sample_sequence = has_metrics ? metrics_snapshot.update_sequence : 0u,
       .logs_generation = debug_logs_generation_get(),
+      .cal_state = has_metrics ? (uint8_t)metrics_snapshot.calibration_state : 0u,
+      .cal_pct = has_metrics ? metrics_snapshot.calibration_progress_pct : 0u,
+      .cal_fan_offset = has_metrics ? metrics_snapshot.calibration_fan_offset : 0.0f,
+      .cal_env_offset = has_metrics ? metrics_snapshot.calibration_envelope_offset : 0.0f,
   };
 
   return true;
@@ -896,7 +904,9 @@ static bool web_status_changed(const web_status_snapshot_t *current,
 
   if (current->pwm != last->pwm || current->led != last->led ||
       current->relay != last->relay || current->line_sync != last->line_sync ||
-      current->dp1_ok != last->dp1_ok || current->dp2_ok != last->dp2_ok) {
+      current->dp1_ok != last->dp1_ok || current->dp2_ok != last->dp2_ok ||
+      current->cal_state != last->cal_state ||
+      current->cal_pct != last->cal_pct) {
     return true;
   }
 
@@ -949,6 +959,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         "\"dp2_temperature\":%.3f,\"dp2_ok\":%s,\"dp_pressure\":%.3f,"
         "\"dp_temperature\":%.3f,\"fan_flow_m3h\":%.3f,"
         "\"target_pressure_pa\":%.2f,\"sample_sequence\":%lu,"
+        "\"cal\":%u,\"cal_pct\":%u,"
+        "\"cal_fan\":%.3f,\"cal_env\":%.3f,"
         "\"logs_enabled\":true,\"logs\":\"%s\"}",
         status->pwm, status->led, status->relay, status->line_sync,
         status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
@@ -957,6 +969,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
         status->dp1_temperature_c, status->fan_flow_m3h,
         status->target_pressure_pa, (unsigned long)status->sample_sequence,
+        (unsigned)status->cal_state, (unsigned)status->cal_pct,
+        status->cal_fan_offset, status->cal_env_offset,
         escaped_logs != NULL ? escaped_logs : "");
   }
 
@@ -969,6 +983,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       "\"dp2_ok\":%s,\"dp_pressure\":%.3f,\"dp_temperature\":%.3f,"
       "\"fan_flow_m3h\":%.3f,\"target_pressure_pa\":%.2f,"
       "\"sample_sequence\":%lu,"
+      "\"cal\":%u,\"cal_pct\":%u,"
+      "\"cal_fan\":%.3f,\"cal_env\":%.3f,"
       "\"logs_enabled\":false}",
       status->pwm, status->led, status->relay, status->line_sync,
       status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
@@ -976,7 +992,9 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       status->dp2_pressure_pa, status->dp2_temperature_c,
       status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
       status->dp1_temperature_c, status->fan_flow_m3h,
-      status->target_pressure_pa, (unsigned long)status->sample_sequence);
+      status->target_pressure_pa, (unsigned long)status->sample_sequence,
+      (unsigned)status->cal_state, (unsigned)status->cal_pct,
+      status->cal_fan_offset, status->cal_env_offset);
 }
 
 static bool web_format_status_json(const web_status_snapshot_t *status,
@@ -1317,31 +1335,34 @@ static bool http_handle_api_post_route(struct netconn *connection,
   if (strcmp(request->path, "/api/calibrate") == 0) {
     blower_metrics_snapshot_t metrics_snapshot = {0};
     const bool has_metrics = blower_metrics_service_get_snapshot(&metrics_snapshot);
-    const bool calibrated = blower_metrics_service_capture_zero_offsets();
-    const char *reason = "ok";
     int written = 0;
 
-    if (!calibrated) {
-      if (!has_metrics) {
-        reason = "metrics_unavailable";
-      } else if (!metrics_snapshot.fan_sample_valid &&
-                 !metrics_snapshot.envelope_sample_valid) {
-        reason = "no_valid_samples";
-      } else if (!metrics_snapshot.fan_sample_valid) {
-        reason = "fan_sample_invalid";
-      } else if (!metrics_snapshot.envelope_sample_valid) {
-        reason = "envelope_sample_invalid";
-      } else {
-        reason = "offset_capture_failed";
+    if (!has_metrics || (!metrics_snapshot.fan_sample_valid &&
+                        !metrics_snapshot.envelope_sample_valid)) {
+      const char *reason = !has_metrics ? "metrics_unavailable" : "no_valid_samples";
+      written = snprintf(
+          response_payload, sizeof(response_payload),
+          "{\"status\":\"error\",\"reason\":\"%s\",\"fan_ok\":false,\"envelope_ok\":false}",
+          reason);
+      if (written <= 0 || (size_t)written >= sizeof(response_payload)) {
+        http_send_text_response(connection, "500 Internal Server Error",
+                                "application/json", "{\"status\":\"error\"}");
+        return false;
       }
+      http_send_response(connection, "409 Conflict",
+                         "application/json", (const uint8_t *)response_payload,
+                         strlen(response_payload));
+      return false;
     }
+
+    blower_metrics_service_begin_calibration();
 
     written = snprintf(
         response_payload, sizeof(response_payload),
-        "{\"status\":\"%s\",\"reason\":\"%s\",\"fan_ok\":%s,\"envelope_ok\":%s}",
-        calibrated ? "ok" : "error", reason,
-        has_metrics && metrics_snapshot.fan_sample_valid ? "true" : "false",
-        has_metrics && metrics_snapshot.envelope_sample_valid ? "true" : "false");
+        "{\"status\":\"ok\",\"reason\":\"calibration_started\","
+        "\"fan_ok\":%s,\"envelope_ok\":%s}",
+        metrics_snapshot.fan_sample_valid ? "true" : "false",
+        metrics_snapshot.envelope_sample_valid ? "true" : "false");
 
     if (written <= 0 || (size_t)written >= sizeof(response_payload)) {
       http_send_text_response(connection, "500 Internal Server Error",
@@ -1349,7 +1370,7 @@ static bool http_handle_api_post_route(struct netconn *connection,
       return false;
     }
 
-    http_send_response(connection, calibrated ? "200 OK" : "409 Conflict",
+    http_send_response(connection, "200 OK",
                        "application/json", (const uint8_t *)response_payload,
                        strlen(response_payload));
     return false;

@@ -26,6 +26,12 @@ typedef struct {
   float leakage_gain;
 } blower_linear_air_leakage_model_config_t;
 
+typedef enum {
+  BLOWER_CAL_NONE = 0,
+  BLOWER_CAL_SAMPLING = 1,
+  BLOWER_CAL_DONE = 2,
+} blower_calibration_state_t;
+
 typedef struct {
   float fan_pressure_pa;
   float fan_temperature_c;
@@ -37,6 +43,10 @@ typedef struct {
   bool envelope_sample_valid;
   uint32_t update_sequence;
   uint32_t last_update_tick;
+  blower_calibration_state_t calibration_state;
+  uint8_t calibration_progress_pct;
+  float calibration_fan_offset;
+  float calibration_envelope_offset;
 } blower_metrics_snapshot_t;
 
 void blower_metrics_service_initialize(const blower_metrics_models_t *models);
@@ -46,6 +56,7 @@ void blower_metrics_service_update(const adp910_sample_t *fan_sample,
                                    bool envelope_sample_valid);
 bool blower_metrics_service_get_snapshot(blower_metrics_snapshot_t *out_snapshot);
 bool blower_metrics_service_capture_zero_offsets(void);
+void blower_metrics_service_begin_calibration(void);
 
 float blower_linear_fan_speed_model(float fan_pressure_pa, const void *context);
 float blower_linear_air_leakage_model(float fan_speed_units,

@@ -24,19 +24,6 @@
 
 <main class="container">
 
-    <section class="cal-banner" id="calBanner">
-        <div class="cal-content">
-            <svg class="cal-icon" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm-.75 4.75a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zM10 14a1 1 0 110-2 1 1 0 010 2z"/>
-            </svg>
-            <div>
-                <p class="cal-title" id="calTitle">Zero calibration required</p>
-                <p class="cal-detail" id="calDetail">Calibrate sensors before starting any test</p>
-            </div>
-        </div>
-        <button type="button" id="calibrateBtn" class="btn btn-cal">Calibrate</button>
-    </section>
-
     <section class="hero">
         <article class="hero-card hero-card--ach">
             <span class="hero-label">Air Changes / Hour</span>
@@ -50,11 +37,34 @@
         </article>
     </section>
 
-    <section class="card mode-card" id="modeCard">
+    <section class="card mode-card locked" id="modeCard">
         <div class="mode-tabs">
             <button type="button" class="mode-tab active" data-mode="manual">Manual</button>
             <button type="button" class="mode-tab" data-mode="semi">Semi-Auto</button>
             <button type="button" class="mode-tab" data-mode="auto">Auto</button>
+        </div>
+
+        <div class="cal-gate" id="calGate">
+            <svg width="40" height="40" viewBox="0 0 20 20" fill="currentColor" class="cal-gate-icon">
+                <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm-.75 4.75a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zM10 14a1 1 0 110-2 1 1 0 010 2z"/>
+            </svg>
+            <h3 class="cal-gate-title" id="calTitle">Zero Calibration Required</h3>
+            <p class="cal-gate-hint" id="calDetail">Ensure fan is off and no pressure across sensors</p>
+            <button type="button" id="calibrateBtn" class="btn btn-primary">Calibrate Sensors</button>
+            <div class="cal-gate-progress" id="calProgress" hidden>
+                <progress id="calProgressBar" max="100" value="0"></progress>
+                <span id="calProgressLabel">Sampling... 0s / 10s</span>
+            </div>
+            <p class="cal-gate-result" id="calResult" hidden></p>
+        </div>
+
+        <div class="cal-recal" id="calRecal" hidden>
+            <span class="cal-recal-status" id="calRecalStatus">✓ Calibrated</span>
+            <div class="cal-recal-progress" id="calRecalProgress" hidden>
+                <progress id="calRecalBar" max="100" value="0"></progress>
+                <span id="calRecalLabel">0%</span>
+            </div>
+            <button type="button" id="recalibrateBtn" class="btn btn-ghost btn-sm">Recalibrate</button>
         </div>
 
         <div class="mode-panel" id="panelManual">
