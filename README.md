@@ -54,7 +54,7 @@ For early purchase interest and availability updates, write to:
   - sensor #2: envelope differential pressure / temperature
 - Controls blower output through a dimmer path.
 - Serves a responsive embedded web app over Wi-Fi.
-- Streams live telemetry via **SSE** (`/events`) with fallback polling.
+- Streams live telemetry via **SSE** (`/events`) with automatic reconnect.
 - Supports **OTA firmware updates** (staging + CRC validation + apply/reboot).
 
 ---
@@ -84,7 +84,8 @@ High-level layers:
 
 ## 🔌 Hardware mapping (default)
 
-Defined in `include/app/app_config.h`.
+ADP910 mapping is defined in `include/app/app_config.h`.
+Dimmer pin mapping is currently defined in `src/tasks/dimmer_task.c`.
 
 - Dimmer path
   - `Z-C` input: `GPIO2`
@@ -148,7 +149,7 @@ Typical variables:
 ## 🚀 Quick start
 
 ```bash
-git clone https://github.com/polo14va/DIY_blower_door.git
+git clone https://github.com/pedromartinezweb/DIY_blower_door.git
 cd DIY_blower_door
 cp .wifi-secrets.example .wifi-secrets
 ```
@@ -276,6 +277,7 @@ Main endpoints:
 - `POST /api/pwm` → `{"value":0..100}`
 - `POST /api/relay` → `{"value":0|1}`
 - `POST /api/led` → `{"value":0|1}`
+- `POST /api/calibrate` → `{}`
 
 OTA endpoints:
 
@@ -288,7 +290,7 @@ OTA endpoints:
 Notes:
 
 - SSE is optimized for a single active client.
-- UI includes fallback polling behavior.
+- UI includes automatic SSE reconnect behavior.
 
 ---
 
