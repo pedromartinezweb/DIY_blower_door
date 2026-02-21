@@ -62,6 +62,7 @@ const state = {
     sensorHealth: {
         fanEverValid: false,
         envelopeEverValid: false,
+        faultCycles: 0,
     },
     ota: {
         uploadInProgress: false,
@@ -554,20 +555,28 @@ async function postJson(url, payload) {
         body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
-
     const text = await response.text();
-    if (!text) {
-        return null;
+    let parsed = null;
+
+    if (text) {
+        try {
+            parsed = JSON.parse(text);
+        } catch (_error) {
+            parsed = null;
+        }
     }
 
-    try {
-        return JSON.parse(text);
-    } catch (_error) {
-        return null;
+    if (!response.ok) {
+        const reason = parsed && typeof parsed.reason === 'string' ? parsed.reason : '';
+        const message = reason
+            ? `HTTP ${response.status} ${reason}`
+            : `HTTP ${response.status}`;
+        const error = new Error(message);
+        error.responsePayload = parsed;
+        throw error;
     }
+
+    return parsed;
 }
 
 async function sendUpdate(endpoint, value) {
@@ -816,7 +825,7 @@ function handleTelemetryPayload(data, sourceDetail) {
     updateStatusPill(
         refs.dpVentStatus,
         telemetry.fanOk,
-        telemetry.fanOk || state.sensorHealth.fanEverValid,
+        Number.isFinite(telemetry.rawFanPressure),
     );
 
     if (refs.dpBuildingPressureValue) {
@@ -828,7 +837,7 @@ function handleTelemetryPayload(data, sourceDetail) {
     updateStatusPill(
         refs.dpBuildingStatus,
         telemetry.envelopeOk,
-        telemetry.envelopeOk || state.sensorHealth.envelopeEverValid,
+        Number.isFinite(telemetry.rawEnvelopePressure),
     );
 
     if (refs.fanFrequencyValue) {
@@ -843,7 +852,18 @@ function handleTelemetryPayload(data, sourceDetail) {
 
     processControlLoop(telemetry.envelopePressurePa, telemetry.envelopeOk);
 
-    setConnectionState('connected', sourceDetail || 'real-time telemetry');
+    if (!telemetry.fanOk || !telemetry.envelopeOk) {
+        state.sensorHealth.faultCycles += 1;
+    } else {
+        state.sensorHealth.faultCycles = 0;
+    }
+
+    if (state.sensorHealth.faultCycles >= 3) {
+        setConnectionState('error', 'ADP910 communication error (I2C)');
+        setSessionState('ADP910 read error: check wiring, power and pull-ups');
+    } else {
+        setConnectionState('connected', sourceDetail || 'real-time telemetry');
+    }
     stampLastUpdate();
 }
 
@@ -1112,7 +1132,8 @@ function bindEvents() {
             captureZeroCalibration();
         } catch (error) {
             console.error('Could not calibrate on firmware:', error);
-            setConnectionState('error', 'failed to calibrate ADP910');
+            setConnectionState('error', `calibration failed: ${error.message}`);
+            setSessionState(`zero calibration failed: ${error.message}`);
         }
     });
 

@@ -13,8 +13,6 @@
 #include <math.h>
 #include <stdint.h>
 
-#define DIMMER_ZERO_CROSS_PIN 2u
-#define DIMMER_GATE_PIN 3u
 #define DIMMER_GATE_PULSE_US 100u
 #define DIMMER_FREQUENCY_DOUBLE_EDGE_THRESHOLD_HZ 70.0f
 
@@ -63,9 +61,9 @@ static bool dimmer_pick_control_pressure(
 
 static int64_t dimmer_gate_pulse_alarm_callback(alarm_id_t alarm_id,
                                                 void *user_data) {
-  gpio_put(DIMMER_GATE_PIN, 1);
+  gpio_put(APP_DIMMER_GATE_PIN, 1);
   busy_wait_us(DIMMER_GATE_PULSE_US);
-  gpio_put(DIMMER_GATE_PIN, 0);
+  gpio_put(APP_DIMMER_GATE_PIN, 0);
   (void)alarm_id;
   (void)user_data;
   return 0;
@@ -76,7 +74,7 @@ static void dimmer_zero_crossing_callback(uint gpio, uint32_t events) {
   const uint8_t power_percent = dimmer_control_get_power_percent();
   (void)events;
 
-  if (gpio != DIMMER_ZERO_CROSS_PIN) {
+  if (gpio != APP_DIMMER_ZERO_CROSS_PIN) {
     return;
   }
 
@@ -89,9 +87,9 @@ static void dimmer_zero_crossing_callback(uint gpio, uint32_t events) {
     const uint32_t delay_us = (uint32_t)(100u - power_percent) * 100u;
     add_alarm_in_us(delay_us, dimmer_gate_pulse_alarm_callback, NULL, false);
   } else if (power_percent >= 100u) {
-    gpio_put(DIMMER_GATE_PIN, 1);
+    gpio_put(APP_DIMMER_GATE_PIN, 1);
   } else {
-    gpio_put(DIMMER_GATE_PIN, 0);
+    gpio_put(APP_DIMMER_GATE_PIN, 0);
   }
 }
 
@@ -124,15 +122,15 @@ void dimmer_task_entry(void *params) {
   blower_control_initialize();
   dimmer_control_set_power_percent(0u);
 
-  gpio_init(DIMMER_ZERO_CROSS_PIN);
-  gpio_set_dir(DIMMER_ZERO_CROSS_PIN, GPIO_IN);
-  gpio_pull_up(DIMMER_ZERO_CROSS_PIN);
+  gpio_init(APP_DIMMER_ZERO_CROSS_PIN);
+  gpio_set_dir(APP_DIMMER_ZERO_CROSS_PIN, GPIO_IN);
+  gpio_pull_up(APP_DIMMER_ZERO_CROSS_PIN);
 
-  gpio_init(DIMMER_GATE_PIN);
-  gpio_set_dir(DIMMER_GATE_PIN, GPIO_OUT);
-  gpio_put(DIMMER_GATE_PIN, 0);
+  gpio_init(APP_DIMMER_GATE_PIN);
+  gpio_set_dir(APP_DIMMER_GATE_PIN, GPIO_OUT);
+  gpio_put(APP_DIMMER_GATE_PIN, 0);
 
-  gpio_set_irq_enabled_with_callback(DIMMER_ZERO_CROSS_PIN, GPIO_IRQ_EDGE_RISE,
+  gpio_set_irq_enabled_with_callback(APP_DIMMER_ZERO_CROSS_PIN, GPIO_IRQ_EDGE_RISE,
                                      true, &dimmer_zero_crossing_callback);
 
   while (1) {

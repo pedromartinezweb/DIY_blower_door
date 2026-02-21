@@ -31,6 +31,7 @@ typedef struct {
   adp910_port_config_t port_config;
   float pressure_offset_pa;
   bool is_initialized;
+  int last_bus_result;
 } adp910_sensor_t;
 
 adp910_status_t adp910_sensor_initialize(adp910_sensor_t *sensor,
@@ -41,5 +42,6 @@ adp910_status_t adp910_sensor_read_sample(adp910_sensor_t *sensor,
 void adp910_sensor_set_pressure_offset(adp910_sensor_t *sensor,
                                        float pressure_offset_pa);
 float adp910_sensor_get_pressure_offset(const adp910_sensor_t *sensor);
+int adp910_sensor_get_last_bus_result(const adp910_sensor_t *sensor);
 
 #endif

@@ -947,14 +947,16 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         "\"dp1_temperature\":%.3f,\"dp1_ok\":%s,\"dp2_pressure\":%.3f,"
         "\"dp2_temperature\":%.3f,\"dp2_ok\":%s,\"dp_pressure\":%.3f,"
         "\"dp_temperature\":%.3f,\"fan_flow_m3h\":%.3f,"
-        "\"target_pressure_pa\":%.2f,\"logs_enabled\":true,\"logs\":\"%s\"}",
+        "\"target_pressure_pa\":%.2f,\"sample_sequence\":%lu,"
+        "\"logs_enabled\":true,\"logs\":\"%s\"}",
         status->pwm, status->led, status->relay, status->line_sync,
         status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
         status->dp1_temperature_c, status->dp1_ok ? "true" : "false",
         status->dp2_pressure_pa, status->dp2_temperature_c,
         status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
         status->dp1_temperature_c, status->fan_flow_m3h,
-        status->target_pressure_pa, escaped_logs != NULL ? escaped_logs : "");
+        status->target_pressure_pa, (unsigned long)status->sample_sequence,
+        escaped_logs != NULL ? escaped_logs : "");
   }
 
   return snprintf(
@@ -964,6 +966,7 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       "\"dp1_ok\":%s,\"dp2_pressure\":%.3f,\"dp2_temperature\":%.3f,"
       "\"dp2_ok\":%s,\"dp_pressure\":%.3f,\"dp_temperature\":%.3f,"
       "\"fan_flow_m3h\":%.3f,\"target_pressure_pa\":%.2f,"
+      "\"sample_sequence\":%lu,"
       "\"logs_enabled\":false}",
       status->pwm, status->led, status->relay, status->line_sync,
       status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
@@ -971,7 +974,7 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       status->dp2_pressure_pa, status->dp2_temperature_c,
       status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
       status->dp1_temperature_c, status->fan_flow_m3h,
-      status->target_pressure_pa);
+      status->target_pressure_pa, (unsigned long)status->sample_sequence);
 }
 
 static bool web_format_status_json(const web_status_snapshot_t *status,
@@ -1064,8 +1067,11 @@ static void sse_stream_task(void *params) {
   sse_stream_context_t *context = (sse_stream_context_t *)params;
   struct netconn *connection = NULL;
   char json_payload[HTTP_RESPONSE_PAYLOAD_BUFFER_SIZE];
+  const char *close_reason = "stop_requested";
+  uint32_t sent_events = 0u;
 
   if (context == NULL) {
+    printf("[SSE] close reason=context_null\n");
     g_sse_active = false;
     vTaskDelete(NULL);
     return;
@@ -1073,6 +1079,7 @@ static void sse_stream_task(void *params) {
 
   connection = context->connection;
   if (connection == NULL) {
+    printf("[SSE] close reason=connection_null\n");
     g_sse_active = false;
     vPortFree(context);
     vTaskDelete(NULL);
@@ -1080,10 +1087,12 @@ static void sse_stream_task(void *params) {
   }
 
   http_send_sse_headers(connection);
+  printf("[SSE] opened\n");
   context->last_emit_ms = to_ms_since_boot(get_absolute_time());
 
   while (1) {
     if (g_sse_stop_requested) {
+      close_reason = "stop_requested";
       break;
     }
 
@@ -1105,8 +1114,10 @@ static void sse_stream_task(void *params) {
         debug_logs_append("SSE payload fallback");
         if (!sse_write_event(connection, k_fallback_payload)) {
           debug_logs_append("SSE write fail fallback");
+          close_reason = "write_fail_fallback";
           break;
         }
+        sent_events += 1u;
         context->last_emit_ms = now_ms;
         vTaskDelay(pdMS_TO_TICKS(SSE_LOOP_INTERVAL_MS));
         continue;
@@ -1114,7 +1125,17 @@ static void sse_stream_task(void *params) {
 
       if (!sse_write_event(connection, json_payload)) {
         debug_logs_append("SSE write fail data");
+        close_reason = "write_fail_data";
         break;
+      }
+
+      sent_events += 1u;
+      if ((sent_events % 10u) == 0u) {
+        printf("[SSE] sent=%lu seq=%lu fan_ok=%u env_ok=%u\n",
+               (unsigned long)sent_events,
+               (unsigned long)status_snapshot.sample_sequence,
+               status_snapshot.dp1_ok ? 1u : 0u,
+               status_snapshot.dp2_ok ? 1u : 0u);
       }
 
       context->last_status = status_snapshot;
@@ -1127,6 +1148,8 @@ static void sse_stream_task(void *params) {
 
   netconn_close(connection);
   netconn_delete(connection);
+  printf("[SSE] closed reason=%s sent=%lu\n", close_reason,
+         (unsigned long)sent_events);
   debug_logs_append("SSE closed");
   g_sse_stop_requested = false;
   g_sse_active = false;
@@ -1141,6 +1164,7 @@ static bool http_start_sse_stream(struct netconn *connection) {
     const uint32_t wait_start_ms = to_ms_since_boot(get_absolute_time());
     const uint32_t handover_timeout_ms = 1200u;
 
+    printf("[SSE] handover requested\n");
     g_sse_stop_requested = true;
     while (g_sse_active &&
            (to_ms_since_boot(get_absolute_time()) - wait_start_ms) <
@@ -1149,6 +1173,7 @@ static bool http_start_sse_stream(struct netconn *connection) {
     }
 
     if (g_sse_active) {
+      printf("[SSE] reject reason=busy\n");
       http_send_text_response(connection, "503 Service Unavailable", "text/plain",
                               "SSE busy");
       return false;
@@ -1180,6 +1205,7 @@ static bool http_start_sse_stream(struct netconn *connection) {
     return false;
   }
 
+  printf("[SSE] task_started\n");
   return true;
 }
 
@@ -1278,7 +1304,7 @@ static bool http_handle_test_report_compat_route(struct netconn *connection,
 static bool http_handle_api_post_route(struct netconn *connection,
                                        const http_request_t *request) {
   int value = 0;
-  char response_payload[80];
+  char response_payload[192];
 
   if (request->method != HTTP_METHOD_POST) {
     http_send_text_response(connection, "405 Method Not Allowed", "text/plain",
@@ -1287,10 +1313,33 @@ static bool http_handle_api_post_route(struct netconn *connection,
   }
 
   if (strcmp(request->path, "/api/calibrate") == 0) {
+    blower_metrics_snapshot_t metrics_snapshot = {0};
+    const bool has_metrics = blower_metrics_service_get_snapshot(&metrics_snapshot);
     const bool calibrated = blower_metrics_service_capture_zero_offsets();
-    const int written = snprintf(response_payload, sizeof(response_payload),
-                                 "{\"status\":\"%s\"}",
-                                 calibrated ? "ok" : "error");
+    const char *reason = "ok";
+    int written = 0;
+
+    if (!calibrated) {
+      if (!has_metrics) {
+        reason = "metrics_unavailable";
+      } else if (!metrics_snapshot.fan_sample_valid &&
+                 !metrics_snapshot.envelope_sample_valid) {
+        reason = "no_valid_samples";
+      } else if (!metrics_snapshot.fan_sample_valid) {
+        reason = "fan_sample_invalid";
+      } else if (!metrics_snapshot.envelope_sample_valid) {
+        reason = "envelope_sample_invalid";
+      } else {
+        reason = "offset_capture_failed";
+      }
+    }
+
+    written = snprintf(
+        response_payload, sizeof(response_payload),
+        "{\"status\":\"%s\",\"reason\":\"%s\",\"fan_ok\":%s,\"envelope_ok\":%s}",
+        calibrated ? "ok" : "error", reason,
+        has_metrics && metrics_snapshot.fan_sample_valid ? "true" : "false",
+        has_metrics && metrics_snapshot.envelope_sample_valid ? "true" : "false");
 
     if (written <= 0 || (size_t)written >= sizeof(response_payload)) {
       http_send_text_response(connection, "500 Internal Server Error",

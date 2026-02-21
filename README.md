@@ -173,6 +173,11 @@ Build and flash firmware:
 ./scripts/build_flash_rp2350.sh
 ```
 
+Debug via SDW
+```bash
+robe-rs attach --chip RP235x --protocol swd "./build/blower_pico_c.elf" --no-location
+```
+
 Open the device IP shown in logs.
 
 ---
