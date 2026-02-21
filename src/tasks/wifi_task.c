@@ -74,6 +74,8 @@ typedef struct {
   float dp2_pressure_pa;
   float dp2_temperature_c;
   bool dp2_ok;
+  float fan_wind_speed_ms;
+  float fan_wind_speed_kmh;
   float fan_flow_m3h;
   float target_pressure_pa;
   uint32_t sample_sequence;
@@ -102,6 +104,23 @@ static size_t g_debug_log_length = 0u;
 static uint8_t g_ota_decoded_chunk_buffer[OTA_MAX_DECODED_CHUNK_BYTES];
 
 static float web_absf(float value) { return value >= 0.0f ? value : -value; }
+
+#define WEB_PITOT_NOISE_FLOOR_PA 0.5f
+
+static float web_task_air_density(float altitude_m, float temperature_c) {
+  const float alt = altitude_m < 0.0f ? 0.0f : (altitude_m > 6000.0f ? 6000.0f : altitude_m);
+  const float p_pa = APP_REFERENCE_PRESSURE_PA * powf(1.0f - 2.25577e-5f * alt, 5.25588f);
+  float t_k = temperature_c + 273.15f;
+  if (t_k < 233.15f) t_k = 233.15f;
+  if (t_k > 353.15f) t_k = 353.15f;
+  return p_pa / (APP_AIR_GAS_CONSTANT * t_k);
+}
+
+static float web_task_pitot_speed_ms(float dp_pa, float air_density) {
+  const float dp_abs = web_absf(dp_pa);
+  if (dp_abs <= 0.0f || air_density <= 0.0f) return 0.0f;
+  return sqrtf(2.0f * dp_abs / air_density);
+}
 
 #if APP_ENABLE_DEBUG_HTTP_ROUTES
 static void debug_logs_clear(void) {
@@ -878,12 +897,9 @@ static bool web_collect_status_snapshot(web_status_snapshot_t *out_snapshot) {
       .dp2_temperature_c =
           has_metrics ? metrics_snapshot.envelope_temperature_c : 0.0f,
       .dp2_ok = has_metrics && metrics_snapshot.envelope_sample_valid,
-      .fan_flow_m3h =
-          has_metrics && metrics_snapshot.fan_sample_valid
-              ? APP_FAN_FLOW_COEFFICIENT_C *
-                    powf(web_absf(metrics_snapshot.fan_pressure_pa),
-                         APP_FAN_FLOW_EXPONENT_N)
-              : 0.0f,
+      .fan_wind_speed_ms = 0.0f,
+      .fan_wind_speed_kmh = 0.0f,
+      .fan_flow_m3h = 0.0f,
       .target_pressure_pa = control_snapshot.target_pressure_pa,
       .sample_sequence = has_metrics ? metrics_snapshot.update_sequence : 0u,
       .logs_generation = debug_logs_generation_get(),
@@ -892,6 +908,25 @@ static bool web_collect_status_snapshot(web_status_snapshot_t *out_snapshot) {
       .cal_fan_offset = has_metrics ? metrics_snapshot.calibration_fan_offset : 0.0f,
       .cal_env_offset = has_metrics ? metrics_snapshot.calibration_envelope_offset : 0.0f,
   };
+
+  if (has_metrics && metrics_snapshot.fan_sample_valid) {
+    const float dp_abs = web_absf(metrics_snapshot.fan_pressure_pa);
+    if (dp_abs >= WEB_PITOT_NOISE_FLOOR_PA) {
+      const float temp_c = metrics_snapshot.fan_temperature_c;
+      if (isfinite(dp_abs) && isfinite(temp_c)) {
+        const float rho = web_task_air_density(APP_ALTITUDE_M, temp_c);
+        const float v_ms = web_task_pitot_speed_ms(
+            metrics_snapshot.fan_pressure_pa, rho);
+        const float density_factor = rho > 0.0f
+            ? sqrtf(APP_SEA_LEVEL_AIR_DENSITY / rho) : 1.0f;
+        const float flow = APP_FAN_FLOW_COEFFICIENT_C *
+              powf(dp_abs, APP_FAN_FLOW_EXPONENT_N) * density_factor;
+        if (isfinite(v_ms))  out_snapshot->fan_wind_speed_ms  = v_ms;
+        if (isfinite(v_ms))  out_snapshot->fan_wind_speed_kmh = v_ms * 3.6f;
+        if (isfinite(flow))  out_snapshot->fan_flow_m3h       = flow;
+      }
+    }
+  }
 
   return true;
 }
@@ -934,6 +969,10 @@ static bool web_status_changed(const web_status_snapshot_t *current,
       STATUS_FLOAT_TOLERANCE) {
     return true;
   }
+  if (web_absf(current->fan_wind_speed_ms - last->fan_wind_speed_ms) >
+      STATUS_FLOAT_TOLERANCE) {
+    return true;
+  }
   if (web_absf(current->target_pressure_pa - last->target_pressure_pa) >
       STATUS_FLOAT_TOLERANCE) {
     return true;
@@ -945,10 +984,26 @@ static bool web_status_changed(const web_status_snapshot_t *current,
   return false;
 }
 
+static inline float safe_json_float(float v) {
+  return isfinite(v) ? v : 0.0f;
+}
+
 static int web_status_json_write_common(const web_status_snapshot_t *status,
                                         char *payload, size_t payload_size,
                                         bool logs_enabled,
                                         const char *escaped_logs) {
+  const float frequency     = safe_json_float(status->frequency_hz);
+  const float dp1_p         = safe_json_float(status->dp1_pressure_pa);
+  const float dp1_t         = safe_json_float(status->dp1_temperature_c);
+  const float dp2_p         = safe_json_float(status->dp2_pressure_pa);
+  const float dp2_t         = safe_json_float(status->dp2_temperature_c);
+  const float wind_ms       = safe_json_float(status->fan_wind_speed_ms);
+  const float wind_kmh      = safe_json_float(status->fan_wind_speed_kmh);
+  const float flow          = safe_json_float(status->fan_flow_m3h);
+  const float target_pa     = safe_json_float(status->target_pressure_pa);
+  const float cal_fan       = safe_json_float(status->cal_fan_offset);
+  const float cal_env       = safe_json_float(status->cal_env_offset);
+
   if (logs_enabled) {
     return snprintf(
         payload, payload_size,
@@ -957,20 +1012,22 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         "\"input\":%u,\"frequency\":%.1f,\"dp1_pressure\":%.3f,"
         "\"dp1_temperature\":%.3f,\"dp1_ok\":%s,\"dp2_pressure\":%.3f,"
         "\"dp2_temperature\":%.3f,\"dp2_ok\":%s,\"dp_pressure\":%.3f,"
-        "\"dp_temperature\":%.3f,\"fan_flow_m3h\":%.3f,"
+        "\"dp_temperature\":%.3f,\"fan_wind_speed_ms\":%.2f,"
+        "\"fan_wind_speed_kmh\":%.2f,\"fan_flow_m3h\":%.3f,"
         "\"target_pressure_pa\":%.2f,\"sample_sequence\":%lu,"
         "\"cal\":%u,\"cal_pct\":%u,"
         "\"cal_fan\":%.3f,\"cal_env\":%.3f,"
         "\"logs_enabled\":true,\"logs\":\"%s\"}",
         status->pwm, status->led, status->relay, status->line_sync,
-        status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
-        status->dp1_temperature_c, status->dp1_ok ? "true" : "false",
-        status->dp2_pressure_pa, status->dp2_temperature_c,
-        status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
-        status->dp1_temperature_c, status->fan_flow_m3h,
-        status->target_pressure_pa, (unsigned long)status->sample_sequence,
+        status->line_sync, frequency, dp1_p,
+        dp1_t, status->dp1_ok ? "true" : "false",
+        dp2_p, dp2_t,
+        status->dp2_ok ? "true" : "false", dp1_p,
+        dp1_t, wind_ms,
+        wind_kmh, flow,
+        target_pa, (unsigned long)status->sample_sequence,
         (unsigned)status->cal_state, (unsigned)status->cal_pct,
-        status->cal_fan_offset, status->cal_env_offset,
+        cal_fan, cal_env,
         escaped_logs != NULL ? escaped_logs : "");
   }
 
@@ -981,20 +1038,22 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       "\"frequency\":%.1f,\"dp1_pressure\":%.3f,\"dp1_temperature\":%.3f,"
       "\"dp1_ok\":%s,\"dp2_pressure\":%.3f,\"dp2_temperature\":%.3f,"
       "\"dp2_ok\":%s,\"dp_pressure\":%.3f,\"dp_temperature\":%.3f,"
+      "\"fan_wind_speed_ms\":%.2f,\"fan_wind_speed_kmh\":%.2f,"
       "\"fan_flow_m3h\":%.3f,\"target_pressure_pa\":%.2f,"
       "\"sample_sequence\":%lu,"
       "\"cal\":%u,\"cal_pct\":%u,"
       "\"cal_fan\":%.3f,\"cal_env\":%.3f,"
       "\"logs_enabled\":false}",
       status->pwm, status->led, status->relay, status->line_sync,
-      status->line_sync, status->frequency_hz, status->dp1_pressure_pa,
-      status->dp1_temperature_c, status->dp1_ok ? "true" : "false",
-      status->dp2_pressure_pa, status->dp2_temperature_c,
-      status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
-      status->dp1_temperature_c, status->fan_flow_m3h,
-      status->target_pressure_pa, (unsigned long)status->sample_sequence,
+      status->line_sync, frequency, dp1_p,
+      dp1_t, status->dp1_ok ? "true" : "false",
+      dp2_p, dp2_t,
+      status->dp2_ok ? "true" : "false", dp1_p,
+      dp1_t, wind_ms,
+      wind_kmh, flow,
+      target_pa, (unsigned long)status->sample_sequence,
       (unsigned)status->cal_state, (unsigned)status->cal_pct,
-      status->cal_fan_offset, status->cal_env_offset);
+      cal_fan, cal_env);
 }
 
 static bool web_format_status_json(const web_status_snapshot_t *status,

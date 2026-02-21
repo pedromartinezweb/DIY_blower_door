@@ -18,6 +18,8 @@ typedef struct {
   float dp2_pressure_pa;
   float dp2_temperature_c;
   bool dp2_ok;
+  float fan_wind_speed_ms;
+  float fan_wind_speed_kmh;
   float fan_flow_m3h;
   float target_pressure_pa;
   uint32_t sample_sequence;

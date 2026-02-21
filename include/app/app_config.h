@@ -283,4 +283,24 @@
 #define APP_FAN_FLOW_EXPONENT_N 0.60f
 #endif
 
+#ifndef APP_FAN_DIAMETER_M
+#define APP_FAN_DIAMETER_M 0.31f
+#endif
+
+#ifndef APP_ALTITUDE_M
+#define APP_ALTITUDE_M 650.0f
+#endif
+
+#ifndef APP_SEA_LEVEL_AIR_DENSITY
+#define APP_SEA_LEVEL_AIR_DENSITY 1.225f
+#endif
+
+#ifndef APP_AIR_GAS_CONSTANT
+#define APP_AIR_GAS_CONSTANT 287.05f
+#endif
+
+#ifndef APP_REFERENCE_PRESSURE_PA
+#define APP_REFERENCE_PRESSURE_PA 101325.0f
+#endif
+
 #endif

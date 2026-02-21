@@ -334,6 +334,8 @@ input[type=range]::-moz-range-thumb {
     border: 1px solid var(--border); background: var(--surface-alt);
 }
 
+.sensor-tile--wide { grid-column: span 2; }
+
 .s-label {
     font-size: 0.7rem; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3);

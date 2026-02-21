@@ -11,8 +11,24 @@
 #include <string.h>
 
 #define STATUS_FLOAT_TOLERANCE 0.01f
+#define FAN_PITOT_NOISE_FLOOR_PA 0.5f
 
 static float web_absf(float value) { return value >= 0.0f ? value : -value; }
+
+static float web_air_density(float altitude_m, float temperature_c) {
+  const float alt = altitude_m < 0.0f ? 0.0f : (altitude_m > 6000.0f ? 6000.0f : altitude_m);
+  const float p_pa = APP_REFERENCE_PRESSURE_PA * powf(1.0f - 2.25577e-5f * alt, 5.25588f);
+  float t_k = temperature_c + 273.15f;
+  if (t_k < 233.15f) t_k = 233.15f;
+  if (t_k > 353.15f) t_k = 353.15f;
+  return p_pa / (APP_AIR_GAS_CONSTANT * t_k);
+}
+
+static float web_pitot_wind_speed_ms(float dp_pa, float air_density) {
+  const float dp_abs = web_absf(dp_pa);
+  if (dp_abs <= 0.0f || air_density <= 0.0f) return 0.0f;
+  return sqrtf(2.0f * dp_abs / air_density);
+}
 
 bool web_status_service_collect_snapshot(web_status_snapshot_t *out_snapshot) {
   blower_control_snapshot_t control_snapshot = {0};
@@ -42,12 +58,9 @@ bool web_status_service_collect_snapshot(web_status_snapshot_t *out_snapshot) {
       .dp2_temperature_c =
           has_metrics ? metrics_snapshot.envelope_temperature_c : 0.0f,
       .dp2_ok = has_metrics && metrics_snapshot.envelope_sample_valid,
-      .fan_flow_m3h =
-          has_metrics && metrics_snapshot.fan_sample_valid
-              ? APP_FAN_FLOW_COEFFICIENT_C *
-                    powf(web_absf(metrics_snapshot.fan_pressure_pa),
-                         APP_FAN_FLOW_EXPONENT_N)
-              : 0.0f,
+      .fan_wind_speed_ms = 0.0f,
+      .fan_wind_speed_kmh = 0.0f,
+      .fan_flow_m3h = 0.0f,
       .target_pressure_pa = control_snapshot.target_pressure_pa,
       .sample_sequence = has_metrics ? metrics_snapshot.update_sequence : 0u,
       .logs_generation = debug_logs_generation_get(),
@@ -65,6 +78,23 @@ bool web_status_service_collect_snapshot(web_status_snapshot_t *out_snapshot) {
       .test_latest_report_id = test_runtime.latest_report_id,
       .test_latest_ach_h1 = test_runtime.latest_ach_ref_h1,
   };
+
+  if (has_metrics && metrics_snapshot.fan_sample_valid) {
+    const float dp_abs = web_absf(metrics_snapshot.fan_pressure_pa);
+    if (dp_abs >= FAN_PITOT_NOISE_FLOOR_PA) {
+      const float rho = web_air_density(APP_ALTITUDE_M,
+                                        metrics_snapshot.fan_temperature_c);
+      const float v_ms = web_pitot_wind_speed_ms(metrics_snapshot.fan_pressure_pa,
+                                                 rho);
+      const float density_factor = rho > 0.0f
+          ? sqrtf(APP_SEA_LEVEL_AIR_DENSITY / rho) : 1.0f;
+
+      out_snapshot->fan_wind_speed_ms = v_ms;
+      out_snapshot->fan_wind_speed_kmh = v_ms * 3.6f;
+      out_snapshot->fan_flow_m3h = APP_FAN_FLOW_COEFFICIENT_C *
+            powf(dp_abs, APP_FAN_FLOW_EXPONENT_N) * density_factor;
+    }
+  }
 
   return true;
 }
@@ -116,6 +146,14 @@ bool web_status_service_has_changed(const web_status_snapshot_t *current,
       STATUS_FLOAT_TOLERANCE) {
     return true;
   }
+  if (web_absf(current->fan_wind_speed_ms - last->fan_wind_speed_ms) >
+      STATUS_FLOAT_TOLERANCE) {
+    return true;
+  }
+  if (web_absf(current->fan_wind_speed_kmh - last->fan_wind_speed_kmh) >
+      STATUS_FLOAT_TOLERANCE) {
+    return true;
+  }
   if (web_absf(current->target_pressure_pa - last->target_pressure_pa) >
       STATUS_FLOAT_TOLERANCE) {
     return true;
@@ -154,7 +192,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         "\"input\":%u,\"frequency\":%.1f,\"dp1_pressure\":%.3f,"
         "\"dp1_temperature\":%.3f,\"dp1_ok\":%s,\"dp2_pressure\":%.3f,"
         "\"dp2_temperature\":%.3f,\"dp2_ok\":%s,\"dp_pressure\":%.3f,"
-        "\"dp_temperature\":%.3f,\"fan_flow_m3h\":%.3f,"
+        "\"dp_temperature\":%.3f,\"fan_wind_speed_ms\":%.2f,"
+        "\"fan_wind_speed_kmh\":%.2f,\"fan_flow_m3h\":%.3f,"
         "\"target_pressure_pa\":%.2f,"
         "\"test_active\":%u,\"test_state\":%u,\"test_mode\":%u,"
         "\"test_direction\":%u,\"test_point_index\":%u,\"test_total_points\":%u,"
@@ -168,7 +207,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
         status->dp1_temperature_c, status->dp1_ok ? "true" : "false",
         status->dp2_pressure_pa, status->dp2_temperature_c,
         status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
-        status->dp1_temperature_c, status->fan_flow_m3h,
+        status->dp1_temperature_c, status->fan_wind_speed_ms,
+        status->fan_wind_speed_kmh, status->fan_flow_m3h,
         status->target_pressure_pa, status->test_active, status->test_state,
         status->test_mode, status->test_direction, status->test_point_index,
         status->test_total_points, status->test_target_pressure_pa,
@@ -184,6 +224,7 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       "\"frequency\":%.1f,\"dp1_pressure\":%.3f,\"dp1_temperature\":%.3f,"
       "\"dp1_ok\":%s,\"dp2_pressure\":%.3f,\"dp2_temperature\":%.3f,"
       "\"dp2_ok\":%s,\"dp_pressure\":%.3f,\"dp_temperature\":%.3f,"
+      "\"fan_wind_speed_ms\":%.2f,\"fan_wind_speed_kmh\":%.2f,"
       "\"fan_flow_m3h\":%.3f,\"target_pressure_pa\":%.2f,"
       "\"test_active\":%u,\"test_state\":%u,\"test_mode\":%u,"
       "\"test_direction\":%u,\"test_point_index\":%u,\"test_total_points\":%u,"
@@ -197,7 +238,8 @@ static int web_status_json_write_common(const web_status_snapshot_t *status,
       status->dp1_temperature_c, status->dp1_ok ? "true" : "false",
       status->dp2_pressure_pa, status->dp2_temperature_c,
       status->dp2_ok ? "true" : "false", status->dp1_pressure_pa,
-      status->dp1_temperature_c, status->fan_flow_m3h,
+      status->dp1_temperature_c, status->fan_wind_speed_ms,
+      status->fan_wind_speed_kmh, status->fan_flow_m3h,
       status->target_pressure_pa, status->test_active, status->test_state,
       status->test_mode, status->test_direction, status->test_point_index,
       status->test_total_points, status->test_target_pressure_pa,

@@ -76,6 +76,7 @@ const refs = {
     startTestBtn: $('startTestBtn'), stopTestBtn: $('stopTestBtn'),
     fanPaVal: $('fanPaVal'), fanTempVal: $('fanTempVal'), fanStatusPill: $('fanStatusPill'),
     bldgPaVal: $('bldgPaVal'), bldgTempVal: $('bldgTempVal'), bldgStatusPill: $('bldgStatusPill'),
+    windSpeedMs: $('windSpeedMs'), windSpeedKmh: $('windSpeedKmh'), fanFlowVal: $('fanFlowVal'),
     lineFreqVal: $('lineFreqVal'), sensorPwmVal: $('sensorPwmVal'),
     settingsBtn: $('settingsBtn'), closeDrawerBtn: $('closeDrawerBtn'),
     settingsDrawer: $('settingsDrawer'), drawerBackdrop: $('drawerBackdrop'),
@@ -519,6 +520,9 @@ function extractTelemetry(data) {
         envT: rawEnvT,
         envOk: toBool(data.dp2_ok),
         rawFanPa, rawEnvPa,
+        windSpeedMs: toNum(data.fan_wind_speed_ms, NaN),
+        windSpeedKmh: toNum(data.fan_wind_speed_kmh, NaN),
+        fanFlowM3h: toNum(data.fan_flow_m3h, NaN),
         fw: typeof data.fw === 'string' ? data.fw : null,
     };
 }
@@ -542,6 +546,13 @@ function handleTelemetry(data, detail) {
     updatePill(refs.bldgStatusPill, t.envOk, Number.isFinite(t.rawEnvPa));
 
     if (refs.lineFreqVal) refs.lineFreqVal.textContent = fmt(t.freqHz, 'Hz', 1);
+
+    if (refs.windSpeedMs) refs.windSpeedMs.textContent = fmt(t.windSpeedMs, 'm/s', 2);
+    if (refs.windSpeedKmh) refs.windSpeedKmh.textContent = fmt(t.windSpeedKmh, 'km/h', 1);
+    if (refs.fanFlowVal) {
+        const flowM3min = Number.isFinite(t.fanFlowM3h) ? t.fanFlowM3h / 60 : NaN;
+        refs.fanFlowVal.textContent = fmt(flowM3min, 'm³/min', 1);
+    }
 
     updateHero(t.fanPa, t.envPa, t.envT);
     processControl(t.envPa, t.envOk);

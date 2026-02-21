@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Blower Door RP2350</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b4bb4'/%3E%3Cpath d='M16 45V19h15c9 0 14 5 14 12 0 4-2 8-6 10l9 4H35l-8-4h-3v4h-8zm8-11h6c4 0 6-2 6-5s-2-5-6-5h-6v10z' fill='white'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand-block">
+            <h1>Blower Door RP2350</h1>
+            <p>Technical interface</p>
+        </div>
+
+        <div class="topbar-actions">
+            <div class="status-block">
+                <span class="status-dot connected"></span>
+                <div class="status-text">
+                    <span>Firmware</span>
+                    <small id="firmwareVersionTop">--</small>
+                </div>
+            </div>
+            <button type="button" id="settingsToggleBtn" class="ghost compact">Settings</button>
+            <div class="status-block" id="connectionStatus">
+                <span class="status-dot" id="connectionDot"></span>
+                <div class="status-text">
+                    <span id="connectionLabel">Offline</span>
+                    <small id="connectionDetail">Waiting for device telemetry</small>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-shell">
+        <section class="hero-grid reveal">
+            <article class="card hero-ach">
+                <span class="kicker">Air changes per hour</span>
+                <p class="hero-value ach"><span id="heroAch">--</span></p>
+                <p class="hero-sub"><span id="heroModeLabel">n50</span> 5 s average · instant <strong id="heroAchInstant">--</strong></p>
+            </article>
+
+            <article class="card hero-pressure">
+                <span class="kicker">Instant building pressure</span>
+                <p class="hero-value pressure" id="heroPressure">-- Pa</p>
+                <p class="hero-sub">Target <strong id="heroTarget">50 Pa</strong></p>
+            </article>
+        </section>
+
+        <section class="card mode-panel reveal delay-1">
+            <div>
+                <h2>Test mode</h2>
+                <p>Select pressure target</p>
+            </div>
+            <div class="segmented-control" role="group" aria-label="Test mode">
+                <button type="button" id="modeN50Btn" class="segmented-btn active">n50 · 50 Pa</button>
+                <button type="button" id="modeN75Btn" class="segmented-btn">n75 · 75 Pa</button>
+            </div>
+        </section>
+
+        <section class="control-grid reveal delay-2">
+            <article class="card">
+                <h2>Test control</h2>
+                <div class="actions-grid">
+                    <button type="button" id="calibrateBtn" class="primary large">Calibrate ADP910 to 0 Pa</button>
+                    <p class="badge" id="baselineStatus">Zero calibration missing</p>
+
+                    <div class="button-row">
+                        <button type="button" id="startTestBtn" class="primary">Start test</button>
+                        <button type="button" id="stopTestBtn" class="ghost">Stop test</button>
+                    </div>
+
+                    <div class="switch-row">
+                        <label class="toggle">
+                            <input type="checkbox" id="fanPowerToggle">
+                            <span>Fan enabled</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="autoHoldToggle">
+                            <span>Auto hold dimmer</span>
+                        </label>
+                    </div>
+                </div>
+            </article>
+
+            <article class="card">
+                <h2>Manual power</h2>
+                <div class="manual-block">
+                    <div class="manual-header">
+                        <span>Manual PWM</span>
+                        <strong><span id="fanSpeedValue">0</span>%</strong>
+                    </div>
+                    <input type="range" id="fanSpeed" min="0" max="100" value="0">
+                    <div class="quick-row">
+                        <button type="button" class="ghost" data-speed="20">20%</button>
+                        <button type="button" class="ghost" data-speed="40">40%</button>
+                        <button type="button" class="ghost" data-speed="70">70%</button>
+                        <button type="button" class="ghost" data-speed="100">100%</button>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="card sensor-card reveal delay-3">
+            <h2>Sensors and status</h2>
+            <div class="sensor-grid">
+                <article class="sensor-tile">
+                    <span class="sensor-label">Fan ΔP · ADP910 #1</span>
+                    <p class="sensor-value" id="dpVentPressureValue">-- Pa</p>
+                    <small id="dpVentTemperatureValue">-- °C</small>
+                    <span class="status-pill" id="dpVentStatus">--</span>
+                </article>
+
+                <article class="sensor-tile">
+                    <span class="sensor-label">Building ΔP · ADP910 #2</span>
+                    <p class="sensor-value" id="dpBuildingPressureValue">-- Pa</p>
+                    <small id="dpBuildingTemperatureValue">-- °C</small>
+                    <span class="status-pill" id="dpBuildingStatus">--</span>
+                </article>
+
+                <article class="sensor-tile">
+                    <span class="sensor-label">Line frequency</span>
+                    <p class="sensor-value" id="fanFrequencyValue">-- Hz</p>
+                </article>
+
+                <article class="sensor-tile">
+                    <span class="sensor-label">Applied PWM</span>
+                    <p class="sensor-value" id="sensorPwmValue">-- %</p>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <aside class="settings-drawer" id="settingsPanel" aria-hidden="true">
+        <div class="settings-header">
+            <h2>Technical settings</h2>
+            <button type="button" id="settingsCloseBtn" class="ghost compact">Close</button>
+        </div>
+
+        <div class="settings-body">
+            <label class="field">
+                <span>Indoor volume</span>
+                <div class="input-wrap">
+                    <input type="number" id="buildingVolume" value="71" min="1" step="1">
+                    <span class="unit">m³</span>
+                </div>
+            </label>
+
+            <label class="field">
+                <span>Fan opening</span>
+                <div class="input-wrap">
+                    <input type="number" id="fanApertureCm" value="31" min="5" max="60" step="0.1">
+                    <span class="unit">cm</span>
+                </div>
+            </label>
+
+            <label class="field">
+                <span>Altitude above sea level</span>
+                <div class="input-wrap">
+                    <input type="number" id="altitude" value="650" min="0" step="1">
+                    <span class="unit">m</span>
+                </div>
+            </label>
+
+            <p class="inline-note">Effective area: <strong id="apertureAreaLabel">-- m²</strong></p>
+
+            <details class="advanced-block">
+                <summary>Advanced settings</summary>
+                <div class="advanced-grid">
+                    <label class="field">
+                        <span>Coefficient C</span>
+                        <input type="number" id="fanCoefC" value="236" min="0.1" step="0.1">
+                    </label>
+                    <label class="field">
+                        <span>Exponent n</span>
+                        <input type="number" id="fanCoefN" value="0.60" min="0.1" step="0.01">
+                    </label>
+                    <label class="field">
+                        <span>Anemometer speed</span>
+                        <div class="input-wrap">
+                            <input type="number" id="anemoSpeed" min="0" step="0.01" placeholder="m/s">
+                            <span class="unit">m/s</span>
+                        </div>
+                    </label>
+                </div>
+                <button type="button" id="applyAnemoBtn" class="ghost">Recalibrate C with anemometer</button>
+            </details>
+
+            <section class="ota-panel">
+                <h3>Firmware OTA</h3>
+                <p class="inline-note">Active version: <strong id="firmwareVersionLabel">--</strong></p>
+
+                <label class="field">
+                    <span>Version label</span>
+                    <input type="text" id="otaVersionInput" value="" maxlength="23" placeholder="auto: active firmware version">
+                </label>
+
+                <label class="field">
+                    <span>Firmware file (.bin)</span>
+                    <input type="file" id="otaFileInput" accept=".bin,application/octet-stream">
+                </label>
+
+                <div class="ota-actions">
+                    <button type="button" id="otaUploadBtn" class="primary">Upload OTA firmware</button>
+                    <button type="button" id="otaApplyBtn" class="ghost">Apply and reboot</button>
+                </div>
+
+                <div class="ota-progress-wrap">
+                    <progress id="otaProgressBar" max="100" value="0"></progress>
+                    <small id="otaProgressLabel">OTA idle</small>
+                </div>
+            </section>
+        </div>
+    </aside>
+
+    <div class="drawer-backdrop" id="settingsBackdrop" hidden></div>
+
+    <footer class="footer-bar">
+        <span id="sessionState">Status: idle</span>
+        <span id="lastUpdate">Last update: --</span>
+        <span id="firmwareVersionFooter">Firmware: --</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
